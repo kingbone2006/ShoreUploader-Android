@@ -270,7 +270,7 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 }
 
                 // Check if file is AV01, VP9, ProRes or MKV that must be converted to H.264
-                var workUri = initialUri
+                var workUri: Uri = initialUri
                 var tempTranscodedFile: File? = null
 
                 if (checkIfNeedsTranscoding(initialUri, fileName)) {
