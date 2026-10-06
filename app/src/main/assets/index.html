@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Shore Uploader - TikTok High-Fidelity Optimizer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                        <polyline points="2 17 12 22 22 17"></polyline>
+                        <polyline points="2 12 12 17 22 12"></polyline>
+                    </svg>
+                </div>
+                <div class="brand-info">
+                    <span class="brand-name">Shore Uploader</span>
+                    <span class="brand-badge">Mobile v2.0.3</span>
+                </div>
+            </div>
+            <div class="header-pill">
+                <span class="dot-live"></span>
+                <span>TikTok Ready</span>
+            </div>
+        </header>
+
+        <!-- Hero Section -->
+        <section class="hero-section">
+            <p class="tag-label">MP4 CONTAINER UTILITY</p>
+            <h1 class="hero-title">Make video.<br>Ready to move.</h1>
+            <p class="hero-subtitle">
+                Chuẩn hóa video chuyên sâu cho thuật toán TikTok. Xử lý 100% trên điện thoại, giữ trọn vẹn độ nét 4K/1080p, màu sắc BT.709 và bitrate gốc.
+            </p>
+
+            <div class="specs-grid">
+                <div class="spec-card">
+                    <span class="spec-val">100%</span>
+                    <span class="spec-label">Giữ nguyên bitrate</span>
+                </div>
+                <div class="spec-card">
+                    <span class="spec-val">BT.709</span>
+                    <span class="spec-label">Chuẩn dải màu</span>
+                </div>
+                <div class="spec-card">
+                    <span class="spec-val">9,112</span>
+                    <span class="spec-label">Ghost Samples</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stepper Indicator -->
+        <div class="stepper-bar">
+            <div class="step-item active" id="step-nav-1">
+                <div class="step-circle">1</div>
+                <span>Chọn Video</span>
+            </div>
+            <div class="step-line" id="line-1"></div>
+            <div class="step-item" id="step-nav-2">
+                <div class="step-circle">2</div>
+                <span>Tối Ưu Hóa</span>
+            </div>
+            <div class="step-line" id="line-2"></div>
+            <div class="step-item" id="step-nav-3">
+                <div class="step-circle">3</div>
+                <span>Lưu & Đăng</span>
+            </div>
+        </div>
+
+        <!-- Main Workspace -->
+        <main class="main-card">
+            <!-- STEP 1: CHOOSE VIDEO -->
+            <div id="step-1" class="step-panel active">
+                <div class="panel-header">
+                    <span class="panel-num">1</span>
+                    <div>
+                        <h2>Chọn video từ máy</h2>
+                        <p class="panel-desc">Hỗ trợ MP4, MOV, MKV xuất từ CapCut, Premiere, DaVinci, Camera...</p>
+                    </div>
+                </div>
+
+                <div class="upload-dropzone" id="dropzone">
+                    <input type="file" id="fileInput" accept="video/*,.mp4,.mov,.mkv,.webm" class="file-input-hidden">
+                    <div class="dropzone-content">
+                        <div class="upload-icon-circle">
+                            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#00f2fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                        </div>
+                        <p class="dropzone-title">Nhấn để chọn video từ Thư viện</p>
+                        <p class="dropzone-hint">Hoặc chọn file từ thư mục Downloads, Movies</p>
+                        <button class="btn-select" id="btnBrowse" type="button">Chọn File Video</button>
+                    </div>
+                </div>
+
+                <!-- Video Info Box (Shown when file selected) -->
+                <div id="videoMetaCard" class="meta-card hidden">
+                    <div class="video-preview-wrapper">
+                        <video id="videoPreview" playsinline controls class="video-preview-player"></video>
+                    </div>
+                    <div class="meta-details">
+                        <div class="meta-row">
+                            <span class="meta-key">Tên tệp:</span>
+                            <span class="meta-value" id="metaName">--</span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">Dung lượng:</span>
+                            <span class="meta-value" id="metaSize">--</span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">Thời lượng:</span>
+                            <span class="meta-value" id="metaDuration">--</span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">Độ phân giải:</span>
+                            <span class="meta-value" id="metaResolution">--</span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">Tốc độ khung hình (FPS):</span>
+                            <span class="meta-value highlight" id="metaFps">--</span>
+                        </div>
+                    </div>
+
+                    <button class="btn-primary full-width" id="btnProceedToStep2">
+                        <span>Tiếp Tục Tối Ưu Hóa</span>
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 2: PROCESSING METHOD -->
+            <div id="step-2" class="step-panel hidden">
+                <div class="panel-header">
+                    <span class="panel-num">2</span>
+                    <div>
+                        <h2>Cấu hình thuật toán</h2>
+                        <p class="panel-desc">Áp dụng kỹ thuật Shore Container Patcher độc quyền</p>
+                    </div>
+                </div>
+
+                <div class="method-card active-method" id="methodContainer">
+                    <div class="method-badge">KHUYÊN DÙNG CHO TIKTOK</div>
+                    <div class="method-title-row">
+                        <div class="method-icon-wrap">
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#00f2fe" stroke-width="2">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                            </svg>
+                        </div>
+                        <div class="method-title-info">
+                            <h3>Shore Fast Container Bypass</h3>
+                            <p>Tối ưu MP4 Box & Chèn Ghost Samples (0% giảm chất lượng)</p>
+                        </div>
+                    </div>
+                    <ul class="method-perks">
+                        <li><span>✓</span> Giữ 100% bitrate video và audio gốc (bit-for-bit)</li>
+                        <li><span>✓</span> Gắn thẻ màu <strong>BT.709 nclx</strong> explicit (chống lệch màu, rửa màu)</li>
+                        <li><span>✓</span> Chèn <strong>9,112 Ghost Samples</strong> đánh lừa bộ nén lần 2 của TikTok</li>
+                        <li><span>✓</span> Dời atom <strong>moov</strong> lên đầu tệp (+faststart) giúp load tức thì</li>
+                        <li><span>✓</span> Tốc độ xử lý siêu tốc: chỉ mất <strong>0.1 - 0.5 giây</strong></li>
+                    </ul>
+                </div>
+
+                <!-- Advanced Options Collapsible -->
+                <details class="advanced-box">
+                    <summary>Tùy chọn nâng cao</summary>
+                    <div class="advanced-content">
+                        <label class="toggle-row">
+                            <span>Chèn 9,112 Ghost Samples (Khuyến nghị)</span>
+                            <input type="checkbox" id="chkGhost" checked>
+                        </label>
+                        <label class="toggle-row">
+                            <span>Cưỡng bức thẻ màu BT.709 (Chống rửa màu)</span>
+                            <input type="checkbox" id="chkBt709" checked>
+                        </label>
+                        <label class="toggle-row">
+                            <span>Chế độ Force HDR10 metadata</span>
+                            <input type="checkbox" id="chkHdr">
+                        </label>
+                        <div class="setting-item">
+                            <label>Tên Encoder Handler:</label>
+                            <input type="text" id="txtHandler" value="shoreuploader-coded" class="input-text">
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Processing Box / Progress Bar -->
+                <div id="processingBox" class="processing-box hidden">
+                    <div class="spinner-orbit">
+                        <div class="spinner-ring"></div>
+                    </div>
+                    <h3 id="processStageTitle" class="process-title">Đang đọc dữ liệu video...</h3>
+                    <p id="processStageSubtitle" class="process-subtitle">Vui lòng chờ trong giây lát</p>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="progressFill" style="width: 15%;"></div>
+                    </div>
+                    <div class="process-log" id="processLog">Khởi tạo ShoreEngine v2.0.3...</div>
+                </div>
+
+                <div class="button-group" id="step2Actions">
+                    <button class="btn-secondary" id="btnBackToStep1">Quay Lại</button>
+                    <button class="btn-primary" id="btnStartOptimize">
+                        <span>Bắt Đầu Tối Ưu</span>
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 3: RESULT & DOWNLOAD -->
+            <div id="step-3" class="step-panel hidden">
+                <div class="panel-header">
+                    <span class="panel-num">3</span>
+                    <div>
+                        <h2>Tối ưu thành công!</h2>
+                        <p class="panel-desc">Video đã sẵn sàng để đăng tải lên TikTok với chất lượng cao nhất</p>
+                    </div>
+                </div>
+
+                <!-- Report Card -->
+                <div class="report-card">
+                    <div class="report-badge">TIKTOK CONTAINER READY</div>
+                    <div class="report-grid">
+                        <div class="report-item">
+                            <span class="report-lbl">Kích thước file</span>
+                            <span class="report-val" id="repOutputSize">--</span>
+                        </div>
+                        <div class="report-item">
+                            <span class="report-lbl">Thời gian xử lý</span>
+                            <span class="report-val highlight" id="repElapsed">--</span>
+                        </div>
+                        <div class="report-item">
+                            <span class="report-lbl">Ghost Samples</span>
+                            <span class="report-val" id="repGhosts">9,112</span>
+                        </div>
+                        <div class="report-item">
+                            <span class="report-lbl">Màu sắc định danh</span>
+                            <span class="report-val" id="repColor">BT.709 Explicit</span>
+                        </div>
+                    </div>
+
+                    <div class="success-notice">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#00f2fe" stroke-width="2.2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                        <span>Container MP4 đã được cấu trúc lại hoàn hảo. Bộ nén TikTok sẽ bỏ qua quá trình transcode nặng lần hai.</span>
+                    </div>
+                </div>
+
+                <!-- Primary Action Buttons -->
+                <div class="export-actions">
+                    <button class="btn-primary full-width" id="btnSaveGallery">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span>Lưu Vào Bộ Sưu Tập (Movies)</span>
+                    </button>
+
+                    <button class="btn-tiktok full-width" id="btnShareTikTok">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                            <path d="M19.589 6.686a4.793 4.793 0 0 1-3.77-4.245V2h-3.445v13.672a2.896 2.896 0 0 1-2.891 2.89 2.896 2.896 0 0 1-2.892-2.89 2.896 2.896 0 0 1 2.892-2.891c.338 0 .66.06 0.957.172V9.456a6.326 6.326 0 0 0-.957-.074c-3.528 0-6.388 2.86-6.388 6.388 0 3.528 2.86 6.388 6.388 6.388 3.528 0 6.388-2.86 6.388-6.388V8.67a8.214 8.214 0 0 0 4.887 1.6V6.828c-.57 0-1.127-.048-1.669-.142z"/>
+                        </svg>
+                        <span>Mở & Đăng Trực Tiếp Lên TikTok</span>
+                    </button>
+
+                    <button class="btn-secondary full-width" id="btnShareGeneric">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+                        <span>Chia Sẻ Cho Ứng Dụng Khác (Zalo, Drive,...)</span>
+                    </button>
+
+                    <button class="btn-text full-width" id="btnResetAll">
+                        <span>Tối ưu video khác</span>
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Educational FAQ Section -->
+        <section class="info-section">
+            <h3 class="info-title">Tại sao cần Shore Uploader cho TikTok?</h3>
+
+            <div class="faq-item">
+                <h4>1. Giữ nguyên màu sắc (BT.709 Color Tagged)</h4>
+                <p>Nhiều video render từ CapCut hoặc Premiere bị rửa màu, nhạt nhẽo khi xem trên màn hình điện thoại khác. Shore Uploader gắn trực tiếp nguyên mẫu màu BT.709 vào container để TikTok hiển thị chính xác 100% gam màu bạn đã chỉnh.</p>
+            </div>
+
+            <div class="faq-item">
+                <h4>2. Đánh lừa bộ nén lần 2 với Ghost Samples</h4>
+                <p>Thuật toán TikTok thường ép bitrate xuống 2 - 3 Mbps khiến các cảnh chuyển động nhanh bị vỡ hạt (pixelated). Kỹ thuật Ghost Samples (9,112 mẫu) khiến máy chủ TikTok nhận diện video đã được chuẩn hóa bởi container cao cấp, từ đó áp dụng thuật toán passthrough ít nén hơn.</p>
+            </div>
+
+            <div class="faq-item">
+                <h4>3. Dời Moov Atom (+faststart)</h4>
+                <p>Đặt thông tin chỉ mục video lên đầu tệp giúp người xem trên TikTok có thể phát ngay lập tức không bị giật lag chờ đệm.</p>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Shore Uploader Mobile v2.0.3 · High-Fidelity Optimizer</p>
+            <p class="footer-sub">Tất cả dữ liệu được xử lý cục bộ trên thiết bị của bạn.</p>
+        </footer>
+    </div>
+
+    <!-- Scripts -->
+    <script src="shore_engine.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

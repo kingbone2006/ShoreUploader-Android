@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_void">#060708</color>
+    <color name="cyan_accent">#00f2fe</color>
+    <color name="panel_bg">#0d1115</color>
+    <color name="border_line">#1c242c</color>
+</resources>
