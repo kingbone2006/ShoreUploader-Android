@@ -56,7 +56,6 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentFile = null;
     let currentArrayBuffer = null;
     let processedBlob = null;
-    let processedBase64 = null;
     let detectedFps = null;
     let outputFileName = "";
 
@@ -83,17 +82,35 @@ document.addEventListener("DOMContentLoaded", () => {
         return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
     }
 
-    // Helper: ArrayBuffer to Base64 in chunks
+    // Helper: ArrayBuffer to Base64 in small chunks (prevent stack overflow)
     function arrayBufferToBase64(buffer) {
         let binary = '';
         const bytes = new Uint8Array(buffer);
         const len = bytes.byteLength;
-        const chunkSize = 0x8000; // 32KB chunks
+        const chunkSize = 0x8000; // 32KB
         for (let i = 0; i < len; i += chunkSize) {
             const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
             binary += String.fromCharCode.apply(null, chunk);
         }
         return window.btoa(binary);
+    }
+
+    // Helper: Stream large blob in 4MB chunks to Android native (Supports 1GB, 2GB, 4GB+ without RAM limits)
+    async function streamBlobToAndroid(blob, target, fileName) {
+        if (!window.AndroidBridge || !window.AndroidBridge.startChunkedStream) return false;
+        const streamId = "s_" + Date.now();
+        const ok = window.AndroidBridge.startChunkedStream(streamId, fileName, target);
+        if (!ok) return false;
+
+        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks
+        for (let offset = 0; offset < blob.size; offset += CHUNK_SIZE) {
+            const slice = blob.slice(offset, Math.min(offset + CHUNK_SIZE, blob.size));
+            const buf = await slice.arrayBuffer();
+            const b64 = arrayBufferToBase64(buf);
+            window.AndroidBridge.appendStreamChunk(streamId, b64);
+        }
+        window.AndroidBridge.finishChunkedStream(streamId, target, fileName, "onSaveFinished");
+        return true;
     }
 
     // Step Navigation
@@ -231,10 +248,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         try {
             updateProgress(25, "Đang đọc cấu trúc MP4...", "Phân tích các box ftyp, moov, mdat", "[1/4] Scanning container headers...");
-            await new Promise(r => setTimeout(r, 120));
+            await new Promise(r => setTimeout(r, 100));
 
             updateProgress(55, "Cấu hình thuật toán Shore...", "Gắn thẻ màu BT.709 & chuẩn bị Ghost Samples", "[2/4] Patching stsd, hdlr, elst atoms...");
-            await new Promise(r => setTimeout(r, 120));
+            await new Promise(r => setTimeout(r, 100));
 
             const opts = {
                 ghostSamples: chkGhost.checked ? 9112 : 0,
@@ -251,7 +268,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const elapsed = performance.now() - t0;
 
             updateProgress(95, "Xác thực tệp đầu ra...", "Kiểm tra tính toàn vẹn của video TikTok", "[4/4] Output verified. Assembling MP4 binary...");
-            await new Promise(r => setTimeout(r, 100));
+            await new Promise(r => setTimeout(r, 80));
 
             // Assemble final blob
             processedBlob = new Blob(result.parts, { type: "video/mp4" });
@@ -264,17 +281,9 @@ document.addEventListener("DOMContentLoaded", () => {
             repColor.textContent = opts.forceHdr ? "HDR10" : "BT.709 nclx";
 
             updateProgress(100, "Hoàn tất!", "Sẵn sàng lưu hoặc đăng tải", "Done in " + elapsed.toFixed(0) + "ms");
-            await new Promise(r => setTimeout(r, 200));
+            await new Promise(r => setTimeout(r, 150));
 
             goToStep(3);
-
-            // Precompute base64 in background for Android Bridge
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const res = reader.result;
-                processedBase64 = res.substr(res.indexOf(",") + 1);
-            };
-            reader.readAsDataURL(processedBlob);
 
         } catch (err) {
             console.error("Optimization failed:", err);
@@ -285,12 +294,22 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // STEP 3: EXPORT HANDLERS
-    btnSaveGallery.addEventListener("click", () => {
+    btnSaveGallery.addEventListener("click", async () => {
         haptic();
         if (!processedBlob) return;
 
-        if (window.AndroidBridge && window.AndroidBridge.saveVideoToGallery && processedBase64) {
-            window.AndroidBridge.saveVideoToGallery(outputFileName, processedBase64, "onSaveFinished");
+        if (window.AndroidBridge) {
+            const originalText = btnSaveGallery.querySelector("span").textContent;
+            btnSaveGallery.querySelector("span").textContent = "Đang lưu vào Thư viện...";
+            btnSaveGallery.disabled = true;
+
+            const ok = await streamBlobToAndroid(processedBlob, "gallery", outputFileName);
+            btnSaveGallery.disabled = false;
+            btnSaveGallery.querySelector("span").textContent = originalText;
+
+            if (!ok && window.AndroidBridge.showToast) {
+                window.AndroidBridge.showToast("Lỗi khi mở luồng lưu trữ");
+            }
         } else {
             // Web browser fallback
             const url = URL.createObjectURL(processedBlob);
@@ -301,34 +320,39 @@ document.addEventListener("DOMContentLoaded", () => {
             a.click();
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-            if (window.AndroidBridge && window.AndroidBridge.showToast) {
-                window.AndroidBridge.showToast("Đang tải xuống video...");
-            } else {
-                alert("Đang tải video về máy: " + outputFileName);
-            }
+            alert("Đang tải video về máy: " + outputFileName);
         }
     });
 
-    btnShareTikTok.addEventListener("click", () => {
+    btnShareTikTok.addEventListener("click", async () => {
         haptic();
-        if (!processedBase64) {
-            alert("Video đang được chuẩn bị, vui lòng thử lại sau 1 giây!");
-            return;
-        }
+        if (!processedBlob) return;
 
-        if (window.AndroidBridge && window.AndroidBridge.shareToTikTok) {
-            window.AndroidBridge.shareToTikTok(outputFileName, processedBase64);
+        if (window.AndroidBridge) {
+            const originalText = btnShareTikTok.querySelector("span").textContent;
+            btnShareTikTok.querySelector("span").textContent = "Đang mở TikTok...";
+            btnShareTikTok.disabled = true;
+
+            await streamBlobToAndroid(processedBlob, "tiktok", outputFileName);
+            btnShareTikTok.disabled = false;
+            btnShareTikTok.querySelector("span").textContent = originalText;
         } else {
             alert("Tính năng mở trực tiếp TikTok khả dụng khi cài đặt file APK trên điện thoại Android!");
         }
     });
 
-    btnShareGeneric.addEventListener("click", () => {
+    btnShareGeneric.addEventListener("click", async () => {
         haptic();
-        if (!processedBase64) return;
+        if (!processedBlob) return;
 
-        if (window.AndroidBridge && window.AndroidBridge.shareGeneric) {
-            window.AndroidBridge.shareGeneric(outputFileName, processedBase64);
+        if (window.AndroidBridge) {
+            const originalText = btnShareGeneric.querySelector("span").textContent;
+            btnShareGeneric.querySelector("span").textContent = "Đang chuẩn bị chia sẻ...";
+            btnShareGeneric.disabled = true;
+
+            await streamBlobToAndroid(processedBlob, "share", outputFileName);
+            btnShareGeneric.disabled = false;
+            btnShareGeneric.querySelector("span").textContent = originalText;
         } else if (navigator.share) {
             const file = new File([processedBlob], outputFileName, { type: "video/mp4" });
             navigator.share({
@@ -345,7 +369,6 @@ document.addEventListener("DOMContentLoaded", () => {
         currentFile = null;
         currentArrayBuffer = null;
         processedBlob = null;
-        processedBase64 = null;
         fileInput.value = "";
         videoPreview.src = "";
         videoMetaCard.classList.add("hidden");
