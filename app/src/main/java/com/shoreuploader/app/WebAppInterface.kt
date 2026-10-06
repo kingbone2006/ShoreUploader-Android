@@ -180,59 +180,65 @@ class WebAppInterface(private val context: Context, private val webView: WebView
     }
 
     // Transcode any video (AV01, VP9, ProRes, MKV, etc.) into pristine H.264 MP4 using Android Media3 Transformer
-    private suspend fun transcodeToH264(inputUri: Uri, onProgress: (Int) -> Unit): File = suspendCancellableCoroutine { continuation ->
-        val transcodeDir = File(context.cacheDir, "transcoded").apply { if (!exists()) mkdirs() }
-        val outputFile = File(transcodeDir, "tc_${System.currentTimeMillis()}.mp4")
+    private suspend fun transcodeToH264(inputUri: Uri, onProgress: (Int) -> Unit): File = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            val transcodeDir = File(context.cacheDir, "transcoded").apply { if (!exists()) mkdirs() }
+            val outputFile = File(transcodeDir, "tc_${System.currentTimeMillis()}.mp4")
 
-        val mainHandler = Handler(Looper.getMainLooper())
-        var isFinished = false
+            val mainHandler = Handler(Looper.getMainLooper())
+            var isFinished = false
 
-        val transformer = Transformer.Builder(context)
-            .setVideoMimeType(MimeTypes.VIDEO_H264)
-            .setAudioMimeType(MimeTypes.AUDIO_AAC)
-            .addListener(object : Transformer.Listener {
-                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                    isFinished = true
-                    if (continuation.isActive) {
-                        continuation.resume(outputFile)
+            val transformer = Transformer.Builder(context)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        isFinished = true
+                        if (continuation.isActive) {
+                            continuation.resume(outputFile)
+                        }
                     }
-                }
 
-                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
-                    isFinished = true
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(exportException)
+                    override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                        isFinished = true
+                        if (continuation.isActive) {
+                            continuation.resumeWithException(exportException)
+                        }
                     }
+                })
+                .build()
+
+            val progressHolder = ProgressHolder()
+            val pollProgress = object : Runnable {
+                override fun run() {
+                    if (isFinished) return
+                    val state = transformer.getProgress(progressHolder)
+                    if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                        onProgress(progressHolder.progress)
+                    }
+                    mainHandler.postDelayed(this, 250)
                 }
-            })
-            .build()
+            }
+            mainHandler.post(pollProgress)
 
-        val progressHolder = ProgressHolder()
-        val pollProgress = object : Runnable {
-            override fun run() {
-                if (isFinished) return
-                val state = transformer.getProgress(progressHolder)
-                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                    onProgress(progressHolder.progress)
+            try {
+                val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(inputUri)).build()
+                transformer.start(editedMediaItem, outputFile.absolutePath)
+            } catch (e: Exception) {
+                isFinished = true
+                if (continuation.isActive) {
+                    continuation.resumeWithException(e)
                 }
-                mainHandler.postDelayed(this, 250)
             }
-        }
-        mainHandler.post(pollProgress)
 
-        try {
-            val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(inputUri)).build()
-            transformer.start(editedMediaItem, outputFile.absolutePath)
-        } catch (e: Exception) {
-            isFinished = true
-            if (continuation.isActive) {
-                continuation.resumeWithException(e)
+            continuation.invokeOnCancellation {
+                isFinished = true
+                mainHandler.post {
+                    try {
+                        transformer.cancel()
+                    } catch (_: Exception) {}
+                }
             }
-        }
-
-        continuation.invokeOnCancellation {
-            isFinished = true
-            transformer.cancel()
         }
     }
 
