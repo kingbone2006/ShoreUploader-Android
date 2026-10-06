@@ -21,6 +21,7 @@ import androidx.core.view.WindowCompat
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var webAppInterface: WebAppInterface
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private val filePickerLauncher = registerForActivityResult(
@@ -35,6 +36,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 data != null -> arrayOf(data)
                 else -> emptyArray()
+            }
+            if (results.isNotEmpty()) {
+                webAppInterface.setSelectedUriDirect(results[0])
             }
             filePathCallback?.onReceiveValue(results)
         } else {
@@ -89,7 +93,8 @@ class MainActivity : AppCompatActivity() {
         webView.isHorizontalScrollBarEnabled = false
 
         // Bridge
-        webView.addJavascriptInterface(WebAppInterface(this, webView), "AndroidBridge")
+        webAppInterface = WebAppInterface(this, webView)
+        webView.addJavascriptInterface(webAppInterface, "AndroidBridge")
 
         webView.webViewClient = object : WebViewClient() {}
 

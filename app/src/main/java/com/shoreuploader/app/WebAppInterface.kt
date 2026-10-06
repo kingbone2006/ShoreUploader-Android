@@ -11,6 +11,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -20,21 +21,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.io.OutputStream
-import java.util.concurrent.ConcurrentHashMap
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class WebAppInterface(private val context: Context, private val webView: WebView) {
 
     private val scope = CoroutineScope(Dispatchers.Main)
 
-    // Stream cache for large files (no file size limit, handles 1GB, 2GB, 4GB+)
-    private val activeStreams = ConcurrentHashMap<String, OutputStream>()
-    private val activeUris = ConcurrentHashMap<String, Uri>()
-    private val activeFiles = ConcurrentHashMap<String, File>()
-
-    // Last rendered file cache
+    @Volatile var selectedUri: Uri? = null
     @Volatile private var lastSavedUri: Uri? = null
     @Volatile private var lastSavedFile: File? = null
     @Volatile private var lastSavedFileName: String = ""
@@ -67,113 +67,376 @@ class WebAppInterface(private val context: Context, private val webView: WebView
         } catch (_: Exception) {}
     }
 
-    // --- CHUNKED STREAMING (Supports any file size without memory limits) ---
-    @JavascriptInterface
-    fun startChunkedStream(streamId: String, fileName: String, target: String): Boolean {
-        try {
-            val cleanFileName = if (fileName.endsWith(".mp4", ignoreCase = true)) fileName else "$fileName.mp4"
-            lastSavedFileName = cleanFileName
+    fun setSelectedUriDirect(uri: Uri) {
+        selectedUri = uri
+        queryUriMetadata(uri)
+    }
 
-            // Always write to a dedicated export file in Movies/ShoreUploader
+    private fun queryUriMetadata(uri: Uri) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                var displayName = "video.mp4"
+                var size: Long = 0
+
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (nameIndex != -1) displayName = cursor.getString(nameIndex) ?: displayName
+                        if (sizeIndex != -1) size = cursor.getLong(sizeIndex)
+                    }
+                }
+
+                if (size <= 0) {
+                    try {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                            size = pfd.statSize
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                withContext(Dispatchers.Main) {
+                    webView.evaluateJavascript(
+                        "if (window.onNativeFileReady) window.onNativeFileReady('${displayName.replace("'", "\\'")}', $size);",
+                        null
+                    )
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // --- HIGH-PERFORMANCE ZERO-RAM NATIVE OPTIMIZER (Supports 3GB, 5GB, 10GB+ without crash) ---
+    @JavascriptInterface
+    fun startNativeOptimization(optionsJson: String) {
+        val uri = selectedUri
+        if (uri == null) {
+            scope.launch {
+                Toast.makeText(context, "Chưa chọn file video!", Toast.LENGTH_SHORT).show()
+                webView.evaluateJavascript("onNativeError('Chưa chọn video');", null)
+            }
+            return
+        }
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                // 1. Determine original file name and size
+                var fileName = "video.mp4"
+                var fileSize: Long = -1
+
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (nameIdx != -1) fileName = cursor.getString(nameIdx) ?: fileName
+                        if (sizeIdx != -1) fileSize = cursor.getLong(sizeIdx)
+                    }
+                }
+
+                if (fileSize <= 0) {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        fileSize = pfd.statSize
+                    }
+                }
+
+                val cleanName = if (fileName.endsWith(".mp4", ignoreCase = true)) {
+                    fileName.replace(".mp4", "_shore_tiktok.mp4", ignoreCase = true)
+                } else {
+                    fileName.replace(Regex("\\.[^/.]+$"), "") + "_shore_tiktok.mp4"
+                }
+                lastSavedFileName = cleanName
+
+                withContext(Dispatchers.Main) {
+                    webView.evaluateJavascript("onNativeProgress(5, 'Đang quét cấu trúc MP4 box...');", null)
+                }
+
+                // 2. Scan top-level boxes: ftyp, moov, mdat
+                var ftypBytes: ByteArray? = null
+                var moovBytes: ByteArray? = null
+                var mdatStart: Long = -1
+                var mdatHeaderSize: Int = 8
+                var mdatDataSize: Long = -1
+                var mdatTotalSize: Long = -1
+
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    var currentPos: Long = 0
+                    val headerBuf = ByteArray(16)
+
+                    while (true) {
+                        val readHdr = readFully(stream, headerBuf, 8)
+                        if (readHdr < 8) break
+
+                        val size32 = ByteBuffer.wrap(headerBuf, 0, 4).order(ByteOrder.BIG_ENDIAN).int.toLong() and 0xffffffffL
+                        val type = String(headerBuf, 4, 4, Charsets.ISO_8859_1)
+
+                        var hdrSize = 8
+                        var totalBoxSize = size32
+
+                        if (size32 == 1L) {
+                            val readExt = readFully(stream, headerBuf, 8)
+                            if (readExt < 8) break
+                            totalBoxSize = ByteBuffer.wrap(headerBuf, 0, 8).order(ByteOrder.BIG_ENDIAN).long
+                            hdrSize = 16
+                        } else if (size32 == 0L) {
+                            if (fileSize > 0) {
+                                totalBoxSize = fileSize - currentPos
+                            } else {
+                                totalBoxSize = -1
+                            }
+                        }
+
+                        val payloadSize = if (totalBoxSize > 0) totalBoxSize - hdrSize else -1
+
+                        if (type == "ftyp") {
+                            val ftypBuf = ByteArray(totalBoxSize.toInt())
+                            // Copy header
+                            System.arraycopy(headerBuf, 0, ftypBuf, 0, hdrSize)
+                            readFully(stream, ftypBuf, payloadSize.toInt(), hdrSize)
+                            ftypBytes = ftypBuf
+                        } else if (type == "moov") {
+                            val moovBuf = ByteArray(totalBoxSize.toInt())
+                            System.arraycopy(headerBuf, 0, moovBuf, 0, hdrSize)
+                            readFully(stream, moovBuf, payloadSize.toInt(), hdrSize)
+                            moovBytes = moovBuf
+                        } else if (type == "mdat") {
+                            mdatStart = currentPos
+                            mdatHeaderSize = hdrSize
+                            mdatTotalSize = totalBoxSize
+                            mdatDataSize = payloadSize
+                            if (payloadSize > 0) {
+                                skipFully(stream, payloadSize)
+                            }
+                        } else {
+                            if (payloadSize > 0) {
+                                skipFully(stream, payloadSize)
+                            }
+                        }
+
+                        if (totalBoxSize > 0) {
+                            currentPos += totalBoxSize
+                        } else {
+                            break
+                        }
+
+                        // If both ftyp, moov, and mdat are found, we can stop scanning!
+                        if (ftypBytes != null && moovBytes != null && mdatStart >= 0) {
+                            break
+                        }
+                    }
+                }
+
+                if (ftypBytes == null || moovBytes == null || mdatStart < 0) {
+                    throw IllegalStateException("Không tìm thấy đủ các box MP4 chuẩn (ftyp, moov, mdat). Tệp có thể không phải MP4 chuẩn.")
+                }
+
+                val ftypB64 = Base64.encodeToString(ftypBytes, Base64.NO_WRAP)
+                val moovB64 = Base64.encodeToString(moovBytes, Base64.NO_WRAP)
+
+                val mdatInfo = JSONObject().apply {
+                    put("start", mdatStart)
+                    put("headerSize", mdatHeaderSize)
+                    put("size", mdatTotalSize)
+                    put("dataSize", mdatDataSize)
+                }
+
+                val actualFileSize = if (fileSize > 0) fileSize else (mdatStart + mdatTotalSize)
+
+                withContext(Dispatchers.Main) {
+                    webView.evaluateJavascript("onNativeProgress(15, 'Tối ưu hóa thẻ màu và Ghost Samples...');", null)
+
+                    // 3. Run Shore Atom patcher in JS (only takes ~200KB of atoms!)
+                    val jsCall = "window.ShoreEngine.patchMp4AtomsBase64('$ftypB64', '$moovB64', '${mdatInfo.toString().replace("'", "\\'")}', $actualFileSize, '${optionsJson.replace("'", "\\'")}');"
+                    webView.evaluateJavascript(jsCall) { jsResult ->
+                        scope.launch(Dispatchers.IO) {
+                            handlePatchResult(uri, cleanName, jsResult, mdatStart, mdatHeaderSize, mdatDataSize)
+                        }
+                    }
+                }
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Lỗi tối ưu hóa: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    webView.evaluateJavascript("onNativeError('${e.localizedMessage?.replace("'", "\\'")}');", null)
+                }
+            }
+        }
+    }
+
+    private suspend fun handlePatchResult(
+        srcUri: Uri,
+        outFileName: String,
+        jsResultJsonString: String?,
+        mdatStart: Long,
+        mdatHeaderSize: Int,
+        mdatDataSize: Long
+    ) {
+        try {
+            if (jsResultJsonString == null || jsResultJsonString == "null") {
+                throw IllegalStateException("Lỗi thực thi ShoreEngine patcher.")
+            }
+
+            // Strips surrounding quotes from evaluateJavascript
+            val unquoted = if (jsResultJsonString.startsWith("\"") && jsResultJsonString.endsWith("\"")) {
+                val sub = jsResultJsonString.substring(1, jsResultJsonString.length - 1)
+                // unescape quotes
+                sub.replace("\\\"", "\"").replace("\\\\", "\\")
+            } else {
+                jsResultJsonString
+            }
+
+            val json = JSONObject(unquoted)
+            if (!json.optBoolean("success", false)) {
+                val errMsg = json.optString("error", "Lỗi xử lý atom")
+                throw IllegalStateException(errMsg)
+            }
+
+            val dBytes = Base64.decode(json.getString("D"), Base64.DEFAULT)
+            val tBytes = Base64.decode(json.getString("T"), Base64.DEFAULT)
+            val fBytes = Base64.decode(json.getString("F"), Base64.DEFAULT)
+            val mBytes = Base64.decode(json.getString("M"), Base64.DEFAULT)
+            val lBytes = Base64.decode(json.getString("L"), Base64.DEFAULT)
+            val reportObj = json.getJSONObject("report")
+
+            withContext(Dispatchers.Main) {
+                webView.evaluateJavascript("onNativeProgress(30, 'Đang xuất video ra Movies/ShoreUploader...');", null)
+            }
+
+            // 4. Create destination in Movies/ShoreUploader
+            var destUri: Uri? = null
+            var destFile: File? = null
+            var outStream: OutputStream? = null
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
-                    put(MediaStore.Video.Media.DISPLAY_NAME, cleanFileName)
+                    put(MediaStore.Video.Media.DISPLAY_NAME, outFileName)
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
                     put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ShoreUploader")
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 }
                 val resolver = context.contentResolver
                 val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                val itemUri = resolver.insert(collection, values) ?: return false
-                val out = resolver.openOutputStream(itemUri) ?: return false
-                activeStreams[streamId] = out
-                activeUris[streamId] = itemUri
+                val itemUri = resolver.insert(collection, values) ?: throw IllegalStateException("Không thể tạo file trong MediaStore")
+                outStream = resolver.openOutputStream(itemUri) ?: throw IllegalStateException("Không thể mở luồng ghi MediaStore")
+                destUri = itemUri
             } else {
                 val moviesDir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
                     "ShoreUploader"
                 ).apply { if (!exists()) mkdirs() }
-                val targetFile = File(moviesDir, cleanFileName)
-                val out = FileOutputStream(targetFile)
-                activeStreams[streamId] = out
-                activeFiles[streamId] = targetFile
+                val targetFile = File(moviesDir, outFileName)
+                outStream = FileOutputStream(targetFile)
+                destFile = targetFile
             }
 
-            // Also keep a cache mirror for instant FileProvider sharing to apps like TikTok
-            try {
-                val cacheDir = File(context.cacheDir, "videos").apply { if (!exists()) mkdirs() }
-                val cacheTarget = File(cacheDir, cleanFileName)
-                // Cache file will be created when needed or copied
-                lastSavedFile = cacheTarget
-            } catch (_: Exception) {}
+            // Also prepare cache mirror file for direct FileProvider sharing
+            val cacheDir = File(context.cacheDir, "videos").apply { if (!exists()) mkdirs() }
+            val cacheTarget = File(cacheDir, outFileName)
+            val cacheOut = FileOutputStream(cacheTarget)
 
-            return true
+            outStream.use { out ->
+                cacheOut.use { cOut ->
+                    // Write new ftyp
+                    out.write(dBytes); cOut.write(dBytes)
+                    // Write free box
+                    out.write(tBytes); cOut.write(tBytes)
+                    // Write new moov (now at the front of the file: faststart!)
+                    out.write(fBytes); cOut.write(fBytes)
+                    // Write new mdat header
+                    out.write(mBytes); cOut.write(mBytes)
+
+                    // 5. Direct Stream Copy of raw mdat video samples (Fast & 0 RAM!)
+                    context.contentResolver.openInputStream(srcUri)?.use { srcStream ->
+                        skipFully(srcStream, mdatStart + mdatHeaderSize)
+
+                        val buffer = ByteArray(8 * 1024 * 1024) // 8MB native buffer
+                        var remaining = mdatDataSize
+                        var totalCopied: Long = 0
+                        var lastReportTime = System.currentTimeMillis()
+
+                        while (remaining > 0) {
+                            val toRead = Math.min(buffer.size.toLong(), remaining).toInt()
+                            val bytesRead = srcStream.read(buffer, 0, toRead)
+                            if (bytesRead <= 0) break
+
+                            out.write(buffer, 0, bytesRead)
+                            cOut.write(buffer, 0, bytesRead)
+
+                            totalCopied += bytesRead
+                            remaining -= bytesRead
+
+                            val now = System.currentTimeMillis()
+                            if (now - lastReportTime > 200) {
+                                lastReportTime = now
+                                val pct = 30 + Math.round((totalCopied.toDouble() / mdatDataSize) * 65.0).toInt()
+                                withContext(Dispatchers.Main) {
+                                    webView.evaluateJavascript("onNativeProgress($pct, 'Đang xuất tệp: $pct%...');", null)
+                                }
+                            }
+                        }
+                    }
+
+                    // Write ghost sample bytes (8 bytes)
+                    out.write(lBytes); cOut.write(lBytes)
+                    out.flush(); cOut.flush()
+                }
+            }
+
+            // 6. Finalize MediaStore entry
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && destUri != null) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                }
+                context.contentResolver.update(destUri, values, null, null)
+                lastSavedUri = destUri
+            } else if (destFile != null) {
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(destFile.absolutePath),
+                    arrayOf("video/mp4"),
+                    null
+                )
+                lastSavedUri = Uri.fromFile(destFile)
+                lastSavedFile = destFile
+            }
+            lastSavedFile = cacheTarget
+
+            withContext(Dispatchers.Main) {
+                webView.evaluateJavascript("onNativeProgress(100, 'Hoàn tất!');", null)
+                webView.evaluateJavascript("onNativeSuccess('${reportObj.toString().replace("'", "\\'")}', '$outFileName');", null)
+            }
+
         } catch (e: Exception) {
             e.printStackTrace()
-            return false
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Lỗi xuất video: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                webView.evaluateJavascript("onNativeError('${e.localizedMessage?.replace("'", "\\'")}');", null)
+            }
         }
     }
 
-    @JavascriptInterface
-    fun appendStreamChunk(streamId: String, base64Chunk: String): Boolean {
-        return try {
-            val stream = activeStreams[streamId] ?: return false
-            val bytes = Base64.decode(base64Chunk, Base64.DEFAULT)
-            stream.write(bytes)
-
-            // If we have a cache file, also write bytes there for 100% reliable FileProvider sharing to TikTok
-            lastSavedFile?.let { cFile ->
-                FileOutputStream(cFile, true).use { cOut ->
-                    cOut.write(bytes)
-                }
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
+    private fun readFully(stream: InputStream, b: ByteArray, len: Int, offset: Int = 0): Int {
+        var n = 0
+        while (n < len) {
+            val count = stream.read(b, offset + n, len - n)
+            if (count < 0) break
+            n += count
         }
+        return n
     }
 
-    @JavascriptInterface
-    fun finishChunkedStream(streamId: String, target: String, fileName: String, callbackJs: String? = null) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val stream = activeStreams.remove(streamId)
-                stream?.flush()
-                stream?.close()
-
-                val uri = activeUris.remove(streamId)
-                val file = activeFiles.remove(streamId)
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && uri != null) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Video.Media.IS_PENDING, 0)
-                    }
-                    context.contentResolver.update(uri, values, null, null)
-                    lastSavedUri = uri
-                } else if (file != null) {
-                    MediaScannerConnection.scanFile(
-                        context,
-                        arrayOf(file.absolutePath),
-                        arrayOf("video/mp4"),
-                        null
-                    )
-                    lastSavedUri = Uri.fromFile(file)
-                    lastSavedFile = file
-                }
-
-                withContext(Dispatchers.Main) {
-                    if (!callbackJs.isNullOrEmpty()) {
-                        webView.evaluateJavascript("$callbackJs(true, '$fileName')", null)
-                    }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Lỗi hoàn tất file: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                    if (!callbackJs.isNullOrEmpty()) {
-                        webView.evaluateJavascript("$callbackJs(false, '${e.localizedMessage}')", null)
-                    }
-                }
+    private fun skipFully(input: InputStream, bytesToSkip: Long) {
+        var remaining = bytesToSkip
+        val skipBuf = ByteArray(65536)
+        while (remaining > 0) {
+            val skipped = input.skip(remaining)
+            if (skipped <= 0) {
+                val bytesRead = input.read(skipBuf, 0, Math.min(skipBuf.size.toLong(), remaining).toInt())
+                if (bytesRead == -1) break
+                remaining -= bytesRead
+            } else {
+                remaining -= skipped
             }
         }
     }
@@ -209,9 +472,8 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
 
-                // Known TikTok package identifiers (Vietnam, Global, Lite, Douyin)
                 val tikTokPackages = listOf(
-                    "com.ss.android.ugc.trill",      // TikTok Vietnam / SEA (most common in VN)
+                    "com.ss.android.ugc.trill",      // TikTok Vietnam / SEA
                     "com.zhiliaoapp.musically",       // TikTok Global
                     "com.zhiliaoapp.musically.go",    // TikTok Lite
                     "com.ss.android.ugc.aweme"        // Douyin
@@ -235,8 +497,7 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 }
 
                 if (!launched) {
-                    // If TikTok is not installed or detected, open chooser
-                    Toast.makeText(context, "Không tìm thấy app TikTok, mở danh sách chia sẻ...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Mở bảng chọn ứng dụng...", Toast.LENGTH_SHORT).show()
                     val chooser = Intent.createChooser(intent, "Chia sẻ video tới TikTok:")
                     chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(chooser)
@@ -247,7 +508,6 @@ class WebAppInterface(private val context: Context, private val webView: WebView
         }
     }
 
-    // Open video in default system player / gallery
     @JavascriptInterface
     fun openSavedVideo() {
         scope.launch(Dispatchers.Main) {

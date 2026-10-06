@@ -31,9 +31,236 @@ function patchMp4(buffer, options = {}) {
     return corePatcher(buffer, options);
 }
 
+function uint8ArrayToBase64(bytes) {
+    let binary = '';
+    const len = bytes.byteLength;
+    const chunkSize = 0x8000;
+    for (let i = 0; i < len; i += chunkSize) {
+        const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    return (typeof window !== 'undefined' ? window.btoa(binary) : Buffer.from(bytes).toString('base64'));
+}
+
+function base64ToUint8Array(base64) {
+    if (typeof window !== 'undefined') {
+        const binary = window.atob(base64);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+    } else {
+        return new Uint8Array(Buffer.from(base64, 'base64'));
+    }
+}
+
+function patchMp4Atoms(ftypBytes, moovBytes, mdatInfo, totalSize, options = {}) {
+    let a = { ...q, ...options };
+    let n = ei(K(ftypBytes)).find(e => "ftyp" === e.type);
+    let s = ei(K(moovBytes)).find(e => "moov" === e.type);
+    let l = {
+        type: "mdat",
+        start: mdatInfo.start,
+        headerSize: mdatInfo.headerSize,
+        size: mdatInfo.size
+    };
+    let i = l.start + l.headerSize;
+    let o = { byteLength: mdatInfo.dataSize };
+
+    let c = s.children.filter(e => "trak" === e.type);
+    let d = c.find(e => "vide" === eh(e));
+    let f = c.find(e => "soun" === eh(e));
+    if (!d) throw new $("No video track found.");
+    let p = ep(d, "stsd");
+    let h = p && p.payload.byteLength >= 16 ? ea(p.payload, 12) : "";
+    if (!p || !H.has(h)) throw new $('Video codec "' + (h || "unknown") + '" must be converted to H.264 before patching.');
+    let u = ed(s, "mvhd");
+    if (!u) throw new $("moov is missing mvhd.");
+    let m = W.has(h);
+    a.forceHdr && function(e) {
+        let t = [];
+        if (!ew(e, "colr")) {
+            let e = new Uint8Array(11);
+            e.set(er("nclx")), [9, 16, 9].forEach((t, a) => J(e, 4 + 2 * a, t)), t.push(ec(eo("colr", e)));
+        }
+        if (!ew(e, "mdcv")) {
+            let e = new Uint8Array(24);
+            [13250, 34500, 7500, 3e3, 34e3, 16e3, 15635, 16450].forEach((t, a) => J(e, 2 * a, t)), ee(e, 16, 1e7), ee(e, 20, 1), t.push(ec(eo("mdcv", e)));
+        }
+        if (!ew(e, "clli")) {
+            let e = new Uint8Array(4);
+            J(e, 0, 1e3), J(e, 2, 400), t.push(ec(eo("clli", e)));
+        }
+        if (!t.length) return;
+        let a = e.payload, r = Q(a, 8), n = 8 + r;
+        if (n > a.byteLength) return;
+        let s = es([a.subarray(0, n), ...t, a.subarray(n)]);
+        ee(s, 8, r + s.byteLength - a.byteLength), e.payload = s;
+    }(p);
+
+    let y = a.forceHdr ? "HDR10" : function(e) {
+        let t = e.payload, a = "SDR", r = el(t, er("colr"));
+        if (-1 !== r && r + 15 <= t.byteLength && "nclx" === ea(t, r + 4)) {
+            let e = Y(t).getUint16(r + 10, !1);
+            16 === e ? a = "HDR10" : 18 === e && (a = "HLG");
+        }
+        return (ew(e, "mdcv") || ew(e, "clli")) && (a = "HDR10"), a;
+    }(p);
+
+    if (n.payload.byteLength >= 8) {
+        let e = ["isom", "iso2", m || "SDR" !== y ? "hvc1" : "avc1", "mp41"], t = new Uint8Array(8 + 4 * e.length);
+        t.set(er("isom")), ee(t, 4, 512), e.forEach((e, a) => t.set(er(e), 8 + 4 * a)), n.payload = t;
+    }
+
+    for (let e of [u, ...ef(s, "tkhd"), ...ef(s, "mdhd")]) {
+        let t = e.payload.slice();
+        t.fill(0, 4, 0 === t[0] ? 12 : 20), e.payload = t;
+    }
+    for (let e of ef(s, "mdhd")) !function(e) {
+        let t = 0 === e.payload[0] ? 20 : 32;
+        if (t + 2 > e.payload.byteLength) return;
+        let a = e.payload.slice();
+        J(a, t, 5575), e.payload = a;
+    }(e);
+
+    ey(ed(ed(d, "mdia"), "hdlr"), a.videoHandler);
+    !function(e, t) {
+        if (!t || 90 > e.payload.byteLength) return;
+        let a = e.payload.slice(), r = en(t).subarray(0, 31);
+        a.fill(0, 58, 90), a[58] = r.byteLength, a.set(r, 59), e.payload = a;
+    }(p, a.compressorName);
+    d.children = d.children.filter(e => "udta" !== e.type);
+
+    let x = ed(ed(d, "edts"), "elst");
+    if (x && a.emptyEditDuration > 0) {
+        let e = eb(x);
+        e.length && eg(x, [function(e, t) {
+            let a = new Uint8Array(2 * e + 4);
+            return 8 === e ? et(a, 0, t) : ee(a, 0, t), a.fill(255, e, 2 * e), a[2 * e + 1] = 1, a;
+        }(ex(x), a.emptyEditDuration), e[0]]);
+    }
+
+    let b = ep(d, "stts");
+    if (b) {
+        let e = eu(b);
+        1 === e.length && e[0][0] > 1 && function(e, t) {
+            let a = new Uint8Array(8 + 8 * t.length);
+            a.set(e.payload.subarray(0, 4)), ee(a, 4, t.length), t.forEach((e, t) => {
+                let [r, n] = e;
+                ee(a, 8 + 8 * t, r), ee(a, 12 + 8 * t, n);
+            }), e.payload = a;
+        }(b, [[e[0][0] - 1, e[0][1]], [1, 1]]);
+    }
+
+    let g = ep(d, "stsz"), w = ep(d, "stsc"), v = [...ef(d, "stco"), ...ef(d, "co64")], j = g && w && v.length ? Math.max(0, a.ghostSamples) : 0;
+    if (j && g && w) {
+        var E = [...function(e) {
+            let t = Q(e.payload, 4), a = Q(e.payload, 8), r = [];
+            for (let n = 0; n < a; n += 1) r.push(t || Q(e.payload, 12 + 4 * n));
+            return r;
+        }(g), ...Array(j).fill(X.length)];
+        let e = new Uint8Array(12 + 4 * E.length);
+        e.set(g.payload.subarray(0, 4)), ee(e, 4, 0), ee(e, 8, E.length), E.forEach((t, a) => ee(e, 12 + 4 * a, t)), g.payload = e;
+        !function(e, t) {
+            let a = Q(e.payload, 4), r = 8 + 12 * a, n = new Uint8Array(r + 12);
+            n.set(e.payload.subarray(0, r)), ee(n, 4, a + 1), ee(n, r, t), ee(n, r + 4, 1), ee(n, r + 8, 1), e.payload = n;
+        }(w, em(v[0]).length + 1);
+    }
+
+    if (f) {
+        ey(ed(ed(f, "mdia"), "hdlr"), a.audioHandler);
+        let e = ed(ed(f, "edts"), "elst"), t = e ? eb(e) : [];
+        if (e && t.length) {
+            let a = ex(e), r = t[0].slice();
+            r.fill(0, a, 2 * a), eg(e, [r]);
+        }
+        f.children = f.children.filter(e => "udta" !== e.type);
+    }
+
+    let N = e => {
+        if (e.children) for (let t of (e.children = e.children.filter(e => !G.has(e.type)), e.children)) N(t);
+    };
+    N(s), s.children = s.children.filter(e => "meta" !== e.type && "udta" !== e.type);
+
+    let k = a.noTags ? null : function(e, t) {
+        let a = [];
+        if (e && a.push(ev("\xa9too", e)), t && a.push(ev("\xa9cmt", t), ev("cprt", t)), !a.length) return null;
+        let r = eo("ilst", new Uint8Array(0), a), n = eo("hdlr", es([new Uint8Array(8), er("mdirappl"), new Uint8Array(9)])), s = eo("meta", es([new Uint8Array(4), ...[n, r].map(ec)]));
+        return eo("udta", new Uint8Array(0), [s]);
+    }(a.toolTag, a.siteTag);
+    k && s.children.push(k);
+
+    let L = new Uint8Array(j ? X : []), R = o.byteLength + L.byteLength, U = R + 8 > 0xffffffff ? 16 : 8, A = [...ef(s, "stco"), ...ef(s, "co64")], S = A.map(em), D = ec(n), T = ec(eo("free", new Uint8Array(0))), F = ec(s);
+    for (let e = !1; !e; ) {
+        let t = D.byteLength + T.byteLength + F.byteLength + U, a = Array(j).fill(t + o.byteLength);
+        A.forEach((e, r) => {
+            let n = S[r].map(e => e - i + t);
+            var s = v.includes(e) ? n.concat(a) : n;
+            "stco" === e.type && s.some(e => e > 0xffffffff) && (e.type = "co64");
+            let l = "co64" === e.type ? 8 : 4, o = new Uint8Array(8 + s.length * l);
+            o.set(e.payload.subarray(0, 4)), ee(o, 4, s.length), s.forEach((e, t) => {
+                8 === l ? et(o, 8 + 8 * t, e) : ee(o, 8 + 4 * t, e);
+            }), e.payload = o;
+        });
+        let r = ec(s);
+        e = r.byteLength === F.byteLength, F = r;
+    }
+
+    let M = new Uint8Array(U);
+    M.set(er("mdat"), 4), 16 === U ? (ee(M, 0, 1), et(M, 8, R + 16)) : ee(M, 0, R + 8);
+
+    let C = D.byteLength + T.byteLength + F.byteLength + M.byteLength + o.byteLength + L.byteLength;
+    return {
+        D, T, F, M, L,
+        report: {
+            version: V,
+            inputSize: totalSize,
+            outputSize: C,
+            sizeDelta: C - totalSize,
+            trackCount: c.length,
+            hasAudio: !!f,
+            codec: h,
+            dynamicRange: y,
+            ghostSamples: j,
+            originalMoovBytes: s.size,
+            outputMoovBytes: F.byteLength,
+            originalMdatBytes: l.size,
+            outputMdatBytes: U + R
+        }
+    };
+}
+
+function patchMp4AtomsBase64(ftypB64, moovB64, mdatInfoJson, totalSize, optionsJson) {
+    try {
+        const ftypBytes = base64ToUint8Array(ftypB64);
+        const moovBytes = base64ToUint8Array(moovB64);
+        const mdatInfo = typeof mdatInfoJson === 'string' ? JSON.parse(mdatInfoJson) : mdatInfoJson;
+        const options = typeof optionsJson === 'string' ? JSON.parse(optionsJson) : (optionsJson || {});
+        const res = patchMp4Atoms(ftypBytes, moovBytes, mdatInfo, totalSize, options);
+        return JSON.stringify({
+            success: true,
+            D: uint8ArrayToBase64(res.D),
+            T: uint8ArrayToBase64(res.T),
+            F: uint8ArrayToBase64(res.F),
+            M: uint8ArrayToBase64(res.M),
+            L: uint8ArrayToBase64(res.L),
+            report: res.report
+        });
+    } catch (err) {
+        return JSON.stringify({
+            success: false,
+            error: err.message || String(err)
+        });
+    }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         patchMp4,
+        patchMp4Atoms,
+        patchMp4AtomsBase64,
         getFps,
         q,
         V,
@@ -44,6 +271,8 @@ if (typeof module !== 'undefined' && module.exports) {
 if (typeof window !== 'undefined') {
     window.ShoreEngine = {
         patchMp4,
+        patchMp4Atoms,
+        patchMp4AtomsBase64,
         getFps,
         q,
         V

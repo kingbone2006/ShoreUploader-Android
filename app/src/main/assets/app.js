@@ -255,6 +255,47 @@ document.addEventListener("DOMContentLoaded", () => {
         goToStep(1);
     });
 
+    // Native Bridge Callbacks
+    window.onNativeFileReady = (name, size) => {
+        metaName.textContent = name;
+        metaSize.textContent = formatBytes(size);
+        videoMetaCard.classList.remove("hidden");
+        outputFileName = name.replace(/\.[^/.]+$/, "") + "_shore_tiktok.mp4";
+        if (!currentFile) {
+            currentFile = { name: name, size: size };
+        }
+    };
+
+    window.onNativeProgress = (pct, log) => {
+        progressFill.style.width = pct + "%";
+        processStageTitle.textContent = `Đang xử lý: ${pct}%`;
+        processStageSubtitle.textContent = log;
+        processLog.textContent = log;
+    };
+
+    window.onNativeSuccess = (reportJsonString, outFileName) => {
+        haptic();
+        try {
+            const report = JSON.parse(reportJsonString);
+            repOutputSize.textContent = `${formatBytes(report.outputSize)} (${report.sizeDelta >= 0 ? "+" : ""}${formatBytes(report.sizeDelta)})`;
+            repGhosts.textContent = (report.ghostSamples || 0).toLocaleString();
+            repColor.textContent = report.dynamicRange || "BT.709";
+            repElapsed.textContent = "Hoàn tất";
+        } catch (_e) {
+            repOutputSize.textContent = formatBytes(currentFile ? currentFile.size : 0);
+        }
+        if (savedFilePathNotice) {
+            savedFilePathNotice.textContent = "Đã lưu tại: Movies/ShoreUploader/" + outFileName;
+        }
+        goToStep(3);
+    };
+
+    window.onNativeError = (errMsg) => {
+        step2Actions.classList.remove("hidden");
+        processingBox.classList.add("hidden");
+        alert("Lỗi khi tối ưu hóa: " + (errMsg || "Không xác định"));
+    };
+
     // STEP 2: RUN OPTIMIZATION & RENDER DIRECTLY TO DISK
     btnStartOptimize.addEventListener("click", async () => {
         if (!currentFile) {
@@ -273,7 +314,22 @@ document.addEventListener("DOMContentLoaded", () => {
             if (log) processLog.textContent = log;
         };
 
-        updateProgress(0, "Đang nạp video...", "Đang đọc dữ liệu từ bộ nhớ thiết bị...", "Bắt đầu đọc (" + formatBytes(currentFile.size) + ")...");
+        const opts = {
+            ghostSamples: chkGhost.checked ? 9112 : 0,
+            forceHdr: chkHdr.checked,
+            videoHandler: txtHandler.value.trim() || "shoreuploader-coded",
+            audioHandler: txtHandler.value.trim() || "shoreuploader-coded"
+        };
+
+        // If running in Android App: Use zero-RAM streaming pipeline (Fastest, handles 3GB, 5GB, 10GB+)
+        if (window.AndroidBridge && window.AndroidBridge.startNativeOptimization) {
+            updateProgress(5, "Đang tối ưu video...", "Đang đọc cấu trúc MP4 box...", "Bắt đầu streaming zero-RAM...");
+            window.AndroidBridge.startNativeOptimization(JSON.stringify(opts));
+            return;
+        }
+
+        // Web browser fallback
+        updateProgress(0, "Đang nạp video...", "Đang đọc dữ liệu từ bộ nhớ...", "Bắt đầu đọc (" + formatBytes(currentFile.size) + ")...");
 
         try {
             // [1/4] Read file with live progress (0% -> 40%)
@@ -290,13 +346,6 @@ document.addEventListener("DOMContentLoaded", () => {
             // [2/4] MP4 Box parsing & optimization (40% -> 65%)
             updateProgress(50, "Đang phân tích cấu trúc MP4...", "Kiểm tra container và tracks...", "[2/4] Quét cấu trúc atom...");
             await new Promise(r => setTimeout(r, 50));
-
-            const opts = {
-                ghostSamples: chkGhost.checked ? 9112 : 0,
-                forceHdr: chkHdr.checked,
-                videoHandler: txtHandler.value.trim() || "shoreuploader-coded",
-                audioHandler: txtHandler.value.trim() || "shoreuploader-coded"
-            };
 
             updateProgress(60, "Tối ưu hóa Container...", "Gắn thẻ màu BT.709 & chèn 9,112 Ghost Samples...", "[3/4] Cấu trúc lại MP4 Box...");
             await new Promise(r => setTimeout(r, 50));
@@ -323,7 +372,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     );
                 });
             } else {
-                // Web browser fallback
                 updateProgress(90, "Đang hoàn tất tệp...", "Đóng gói MP4...", "Xong!");
                 await new Promise(r => setTimeout(r, 100));
             }
