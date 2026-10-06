@@ -16,7 +16,7 @@
                 </div>
                 <div class="brand-info">
                     <span class="brand-name">Shore Uploader</span>
-                    <span class="brand-badge">Mobile v2.0.3</span>
+                    <span class="brand-badge">Phiên bản v1.0.0</span>
                 </div>
             </div>
             <div class="header-pill">
@@ -267,6 +267,14 @@
                     <button class="btn-text full-width" id="btnResetAll">
                         <span>Tối ưu video khác</span>
                     </button>
+
+                    <!-- Export Streaming Progress Bar -->
+                    <div id="exportProgressBox" class="processing-box hidden" style="margin-top: 14px; padding: 16px;">
+                        <div class="progress-track">
+                            <div class="progress-fill" id="exportProgressFill" style="width: 0%;"></div>
+                        </div>
+                        <div class="process-log" id="exportProgressLog">Đang ghi dữ liệu vào máy...</div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -293,7 +301,7 @@
 
         <!-- Footer -->
         <footer class="app-footer">
-            <p>Shore Uploader Mobile v2.0.3 · High-Fidelity Optimizer</p>
+            <p>Shore Uploader Mobile v1.0.0 · TikTok High-Fidelity Optimizer</p>
             <p class="footer-sub">Tất cả dữ liệu được xử lý cục bộ trên thiết bị của bạn.</p>
         </footer>
     </div>
