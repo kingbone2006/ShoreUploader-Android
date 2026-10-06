@@ -3,10 +3,14 @@ package com.shoreuploader.app
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -17,18 +21,28 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
+import androidx.media3.transformer.Transformer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class WebAppInterface(private val context: Context, private val webView: WebView) {
 
@@ -95,9 +109,12 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                     } catch (_: Exception) {}
                 }
 
+                // Detect video codec using MediaExtractor
+                val codecInfo = detectVideoCodec(uri)
+
                 withContext(Dispatchers.Main) {
                     webView.evaluateJavascript(
-                        "if (window.onNativeFileReady) window.onNativeFileReady('${displayName.replace("'", "\\'")}', $size);",
+                        "if (window.onNativeFileReady) window.onNativeFileReady('${displayName.replace("'", "\\'")}', $size, '${codecInfo.replace("'", "\\'")}');",
                         null
                     )
                 }
@@ -107,11 +124,123 @@ class WebAppInterface(private val context: Context, private val webView: WebView
         }
     }
 
+    private fun detectVideoCodec(uri: Uri): String {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(context, uri, null)
+            var foundCodec = ""
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("video/")) {
+                    foundCodec = when (mime) {
+                        MediaFormat.MIMETYPE_VIDEO_AVC -> "H.264 (AVC)"
+                        MediaFormat.MIMETYPE_VIDEO_HEVC -> "H.265 (HEVC)"
+                        MediaFormat.MIMETYPE_VIDEO_AV1 -> "AV1 (Cần chuyển đổi)"
+                        MediaFormat.MIMETYPE_VIDEO_VP9 -> "VP9 (Cần chuyển đổi)"
+                        MediaFormat.MIMETYPE_VIDEO_VP8 -> "VP8 (Cần chuyển đổi)"
+                        else -> mime.substringAfter("video/")
+                    }
+                    break
+                }
+            }
+            if (foundCodec.isNotEmpty()) foundCodec else "Không xác định"
+        } catch (_: Exception) {
+            "MP4 Native"
+        } finally {
+            try { extractor.release() } catch (_: Exception) {}
+        }
+    }
+
+    // Check if video requires transcoding to H.264 (e.g. MKV, AV1, VP9, ProRes)
+    private fun checkIfNeedsTranscoding(uri: Uri, fileName: String): Boolean {
+        if (!fileName.endsWith(".mp4", ignoreCase = true) && !fileName.endsWith(".mov", ignoreCase = true)) {
+            return true // .mkv, .webm, .avi, etc. require transcode/remux to mp4
+        }
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(context, uri, null)
+            var needsTranscode = false
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("video/")) {
+                    if (mime != MediaFormat.MIMETYPE_VIDEO_AVC && mime != MediaFormat.MIMETYPE_VIDEO_HEVC) {
+                        needsTranscode = true // AV1, VP9, VP8, ProRes, etc.
+                    }
+                    break
+                }
+            }
+            needsTranscode
+        } catch (_: Exception) {
+            false
+        } finally {
+            try { extractor.release() } catch (_: Exception) {}
+        }
+    }
+
+    // Transcode any video (AV01, VP9, ProRes, MKV, etc.) into pristine H.264 MP4 using Android Media3 Transformer
+    private suspend fun transcodeToH264(inputUri: Uri, onProgress: (Int) -> Unit): File = suspendCancellableCoroutine { continuation ->
+        val transcodeDir = File(context.cacheDir, "transcoded").apply { if (!exists()) mkdirs() }
+        val outputFile = File(transcodeDir, "tc_${System.currentTimeMillis()}.mp4")
+
+        val mainHandler = Handler(Looper.getMainLooper())
+        var isFinished = false
+
+        val transformer = Transformer.Builder(context)
+            .setVideoMimeType(MimeTypes.VIDEO_H264)
+            .setAudioMimeType(MimeTypes.AUDIO_AAC)
+            .addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    isFinished = true
+                    if (continuation.isActive) {
+                        continuation.resume(outputFile)
+                    }
+                }
+
+                override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+                    isFinished = true
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(exportException)
+                    }
+                }
+            })
+            .build()
+
+        val progressHolder = ProgressHolder()
+        val pollProgress = object : Runnable {
+            override fun run() {
+                if (isFinished) return
+                val state = transformer.getProgress(progressHolder)
+                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                    onProgress(progressHolder.progress)
+                }
+                mainHandler.postDelayed(this, 250)
+            }
+        }
+        mainHandler.post(pollProgress)
+
+        try {
+            val editedMediaItem = EditedMediaItem.Builder(MediaItem.fromUri(inputUri)).build()
+            transformer.start(editedMediaItem, outputFile.absolutePath)
+        } catch (e: Exception) {
+            isFinished = true
+            if (continuation.isActive) {
+                continuation.resumeWithException(e)
+            }
+        }
+
+        continuation.invokeOnCancellation {
+            isFinished = true
+            transformer.cancel()
+        }
+    }
+
     // --- HIGH-PERFORMANCE ZERO-RAM NATIVE OPTIMIZER (Supports 3GB, 5GB, 10GB+ without crash) ---
     @JavascriptInterface
     fun startNativeOptimization(optionsJson: String) {
-        val uri = selectedUri
-        if (uri == null) {
+        val initialUri = selectedUri
+        if (initialUri == null) {
             scope.launch {
                 Toast.makeText(context, "Chưa chọn file video!", Toast.LENGTH_SHORT).show()
                 webView.evaluateJavascript("onNativeError('Chưa chọn video');", null)
@@ -125,7 +254,7 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 var fileName = "video.mp4"
                 var fileSize: Long = -1
 
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                context.contentResolver.query(initialUri, null, null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {
                         val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                         val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
@@ -135,9 +264,29 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 }
 
                 if (fileSize <= 0) {
-                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    context.contentResolver.openFileDescriptor(initialUri, "r")?.use { pfd ->
                         fileSize = pfd.statSize
                     }
+                }
+
+                // Check if file is AV01, VP9, ProRes or MKV that must be converted to H.264
+                var workUri = initialUri
+                var tempTranscodedFile: File? = null
+
+                if (checkIfNeedsTranscoding(initialUri, fileName)) {
+                    withContext(Dispatchers.Main) {
+                        webView.evaluateJavascript("onNativeProgress(2, 'Đang tự động chuyển đổi codec sang H.264...');", null)
+                    }
+
+                    tempTranscodedFile = transcodeToH264(initialUri) { pct ->
+                        val scaledPct = Math.min(40, Math.round(pct * 0.40f))
+                        scope.launch(Dispatchers.Main) {
+                            webView.evaluateJavascript("onNativeProgress($scaledPct, 'Đang chuyển đổi sang H.264: $pct%...');", null)
+                        }
+                    }
+
+                    workUri = Uri.fromFile(tempTranscodedFile)
+                    fileSize = tempTranscodedFile.length()
                 }
 
                 val cleanName = if (fileName.endsWith(".mp4", ignoreCase = true)) {
@@ -148,7 +297,7 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 lastSavedFileName = cleanName
 
                 withContext(Dispatchers.Main) {
-                    webView.evaluateJavascript("onNativeProgress(5, 'Đang quét cấu trúc MP4 box...');", null)
+                    webView.evaluateJavascript("onNativeProgress(45, 'Đang quét cấu trúc MP4 box...');", null)
                 }
 
                 // 2. Scan top-level boxes: ftyp, moov, mdat
@@ -159,7 +308,7 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 var mdatDataSize: Long = -1
                 var mdatTotalSize: Long = -1
 
-                context.contentResolver.openInputStream(uri)?.use { stream ->
+                context.contentResolver.openInputStream(workUri)?.use { stream ->
                     var currentPos: Long = 0
                     val headerBuf = ByteArray(16)
 
@@ -190,7 +339,6 @@ class WebAppInterface(private val context: Context, private val webView: WebView
 
                         if (type == "ftyp") {
                             val ftypBuf = ByteArray(totalBoxSize.toInt())
-                            // Copy header
                             System.arraycopy(headerBuf, 0, ftypBuf, 0, hdrSize)
                             readFully(stream, ftypBuf, payloadSize.toInt(), hdrSize)
                             ftypBytes = ftypBuf
@@ -219,7 +367,6 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                             break
                         }
 
-                        // If both ftyp, moov, and mdat are found, we can stop scanning!
                         if (ftypBytes != null && moovBytes != null && mdatStart >= 0) {
                             break
                         }
@@ -243,13 +390,13 @@ class WebAppInterface(private val context: Context, private val webView: WebView
                 val actualFileSize = if (fileSize > 0) fileSize else (mdatStart + mdatTotalSize)
 
                 withContext(Dispatchers.Main) {
-                    webView.evaluateJavascript("onNativeProgress(15, 'Tối ưu hóa thẻ màu và Ghost Samples...');", null)
+                    webView.evaluateJavascript("onNativeProgress(55, 'Tối ưu hóa thẻ màu và Ghost Samples...');", null)
 
-                    // 3. Run Shore Atom patcher in JS (only takes ~200KB of atoms!)
                     val jsCall = "window.ShoreEngine.patchMp4AtomsBase64('$ftypB64', '$moovB64', '${mdatInfo.toString().replace("'", "\\'")}', $actualFileSize, '${optionsJson.replace("'", "\\'")}');"
                     webView.evaluateJavascript(jsCall) { jsResult ->
                         scope.launch(Dispatchers.IO) {
-                            handlePatchResult(uri, cleanName, jsResult, mdatStart, mdatHeaderSize, mdatDataSize)
+                            handlePatchResult(workUri, cleanName, jsResult, mdatStart, mdatHeaderSize, mdatDataSize)
+                            tempTranscodedFile?.delete() // Cleanup temporary transcode file
                         }
                     }
                 }

@@ -13,6 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const metaDuration = document.getElementById("metaDuration");
     const metaResolution = document.getElementById("metaResolution");
     const metaFps = document.getElementById("metaFps");
+    const metaCodec = document.getElementById("metaCodec");
 
     // Steppers & Panels
     const stepNav1 = document.getElementById("step-nav-1");
@@ -256,9 +257,12 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Native Bridge Callbacks
-    window.onNativeFileReady = (name, size) => {
+    window.onNativeFileReady = (name, size, codecInfo) => {
         metaName.textContent = name;
         metaSize.textContent = formatBytes(size);
+        if (metaCodec) {
+            metaCodec.textContent = codecInfo || "Tự động nhận diện";
+        }
         videoMetaCard.classList.remove("hidden");
         outputFileName = name.replace(/\.[^/.]+$/, "") + "_shore_tiktok.mp4";
         if (!currentFile) {
