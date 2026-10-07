@@ -40,6 +40,8 @@
 ## 📖 Giới thiệu
 **Shore Uploader for Android** là ứng dụng di động mã nguồn mở giúp tối ưu hóa cấu trúc tệp video trước khi đăng tải lên **TikTok**, loại bỏ triệt để hiện tượng bị nén mờ, vỡ hạt và bạc màu (washed out).
 
+Được kế thừa và phát triển từ ý tưởng của **phiên bản website tiện ích ShoreUploader** ([shoreuploader.com](https://shoreuploader.com)), phiên bản Android mang toàn bộ sức mạnh tối ưu hóa container về một ứng dụng di động độc lập, nhanh chóng và hoạt động hoàn toàn offline.
+
 Khi bạn sáng tạo và dựng video bằng các phần mềm như **CapCut, Adobe Premiere, DaVinci Resolve**, thuật toán của TikTok thường tự động nén lần 2 (secondary re-encoding), ép bitrate xuống rất thấp (khoảng 2 – 3 Mbps) và làm lệch không gian màu hiển thị trên các thiết bị khác nhau. **Shore Uploader** tích hợp lõi xử lý **ShoreEngine v2.0** chuyên biệt, can thiệp vào cấu trúc container MP4 (Box / Atom) mà **không làm suy hao chất lượng hình ảnh (lossless patch)**. Bằng cách chèn **Ghost Samples**, chuẩn hóa **Metadata BT.709 Explicit**, và dịch chuyển **Moov Atom (+faststart)**, video sẽ kích hoạt cơ chế passthrough ít nén hơn của máy chủ TikTok, giúp giữ nguyên độ sắc nét ban đầu.
 
 ---
@@ -129,6 +131,8 @@ Nếu bạn thấy Shore Uploader hữu ích và giúp video TikTok của bạn 
 ## 📖 Overview
 **Shore Uploader for Android** is an open-source mobile application designed to optimize video file container architecture before uploading to **TikTok**, effectively preventing brutal re-compression, blurry playback, pixelation, and washed-out colors.
 
+Ported and inspired by the innovative concept of the **ShoreUploader Web tool** ([shoreuploader.com](https://shoreuploader.com)), this Android version brings the full power of MP4 container optimization directly onto your mobile device as a native, lightning-fast, and completely offline utility.
+
 When exporting videos from editing suites such as **CapCut, Adobe Premiere Pro, or DaVinci Resolve**, TikTok's transcoding servers frequently downscale the video bitrate down to ~2–3 Mbps and introduce color gamut misalignments across different mobile panels. **Shore Uploader** incorporates the high-efficiency **ShoreEngine v2.0** container patcher that works directly on MP4 atoms/boxes **without degrading visual fidelity (lossless patching)**. By injecting **Ghost Samples**, assigning **Explicit BT.709 Color Metadata**, and relocating the **Moov Atom (+faststart)** to the front of the file, TikTok is tricked into using an enhanced passthrough pipeline with minimal compression.
 
 ---
@@ -215,5 +219,7 @@ If you enjoy Shore Uploader and it helps elevate the visual quality of your cont
 ## 📄 License & Acknowledgements / Giấy phép & Tri ân
 
 - **Shore Uploader for Android**: Licensed under the [MIT License](LICENSE).
+- **Ý tưởng & Thuật toán gốc (Original Concept & Web Version)**: Chân thành cảm ơn và tri ân ý tưởng tuyệt vời từ **phiên bản website ShoreUploader** ([shoreuploader.com](https://shoreuploader.com)) cùng đội ngũ tác giả đã tiên phong nghiên cứu cơ chế tối ưu hóa container MP4 cho video TikTok. Đây là nguồn cảm hứng cốt lõi để xây dựng phiên bản Android độc lập này.  
+  *(Sincere thanks and full credit to the original **ShoreUploader web version** ([shoreuploader.com](https://shoreuploader.com)) and its authors for the pioneering concept and container patching research that inspired and laid the foundation for this native Android app).*
 - **Google AndroidX Media3**: High-performance media editing and transformation library by Google.
 - Sincere thanks to the open-source media engineering and video creator communities for research into TikTok container passthrough behaviors.
